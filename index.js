@@ -122,7 +122,7 @@ app.post('/events', async (req, res) => {
 
 // Get all events endpoint
 app.get('/events', async (req, res) => {
-    
+
     try {
         const events = await Event.find().sort({ created_at: -1 }); // Latest first
         res.status(200).json(events);
@@ -136,31 +136,54 @@ app.put('/events/:id', async (req, res) => {
     const { id } = req.params;
     const { title, description, date, time, venue } = req.body;
     try {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid event id' });
+        }
+
+        // Basic validation for required fields
+        if (!title || !date || !time) {
+            return res.status(400).json({ message: 'Title, date, and time are required' });
+        }
+
+        // Normalize inputs
+        const normalized = {
+            title: String(title).trim(),
+            description: description == null ? undefined : String(description).trim(),
+            date: date ? new Date(date) : undefined,
+            time: String(time).trim(),
+            venue: venue == null ? undefined : String(venue).trim()
+        };
+
         const updatedEvent = await Event.findByIdAndUpdate(
             id,
-            { title, description, date, time, venue },
+            normalized,
             { new: true, runValidators: true }
         );
         if (!updatedEvent) {
             return res.status(404).json({ message: 'Event not found' });
         }
-        res.status(200).json({ message: 'Event updated successfully', event: updatedEvent });
+        return res.status(200).json({ message: 'Event updated successfully', event: updatedEvent });
     } catch (error) {
-        res.status(500).json({ message: 'Error updating event', error: error.message });
+        return res.status(500).json({ message: 'Error updating event', error: error.message });
     }
 });
+
+
 
 // Delete event endpoint
 app.delete('/events/:id', async (req, res) => {
     const { id } = req.params;
     try {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid event id' });
+        }
         const deletedEvent = await Event.findByIdAndDelete(id);
         if (!deletedEvent) {
             return res.status(404).json({ message: 'Event not found' });
         }
-        res.status(200).json({ message: 'Event deleted successfully' });
+        return res.status(200).json({ message: 'Event deleted successfully', eventId: id });
     } catch (error) {
-        res.status(500).json({ message: 'Error deleting event', error: error.message });
+        return res.status(500).json({ message: 'Error deleting event', error: error.message });
     }
 });
 
