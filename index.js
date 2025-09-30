@@ -147,6 +147,8 @@ app.put('/events/:id', async (req, res) => {
         }
         
 
+
+        
         // Normalize inputs
         const normalized = {
             title: String(title).trim(),
