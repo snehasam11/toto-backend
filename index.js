@@ -145,6 +145,8 @@ app.put('/events/:id', async (req, res) => {
             return res.status(400).json({ message: 'Title, date, and time are required' });
         }
 
+
+        
         // Normalize inputs
         const normalized = {
             title: String(title).trim(),
