@@ -132,6 +132,7 @@ app.get('/events', async (req, res) => {
 });
 
 // Update event endpoint
+
 app.put('/events/:id', async (req, res) => {
     const { id } = req.params;
     const { title, description, date, time, venue } = req.body;
