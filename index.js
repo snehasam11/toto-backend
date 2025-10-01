@@ -74,6 +74,23 @@ app.post('/login', async (req, res) => {
     }
 });
 
+// Get user by email (for deriving userId from stored email)
+app.get('/users/by-email', async (req, res) => {
+    try {
+        const { email } = req.query;
+        if (!email) {
+            return res.status(400).json({ message: 'Email is required' });
+        }
+        const user = await User.findOne({ email }).select('_id name email role');
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        return res.status(200).json({ userId: user._id, name: user.name, email: user.email, role: user.role });
+    } catch (error) {
+        return res.status(500).json({ message: 'Error fetching user by email', error: error.message });
+    }
+});
+
 // Email existence validation endpoint
 app.post('/validate-email', async (req, res) => {
     const { email } = req.body;
@@ -217,12 +234,12 @@ app.post('/event-registrations', async (req, res) => {
     }
 });
 
-// Get all event registrations with event title and user name
+// Get all event registrations with event title and user details
 app.get('/event-registrations', async (req, res) => {
     try {
         const registrations = await Registration.find()
             .populate('event', 'title')
-            .populate('user', 'name email');
+            .populate('user', '-password');
         res.status(200).json(registrations);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching registrations', error: error.message });
