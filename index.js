@@ -191,6 +191,44 @@ app.delete('/events/:id', async (req, res) => {
     }
 });
 
+// Event Registration Schema
+const registrationSchema = new mongoose.Schema({
+    event: { type: mongoose.Schema.Types.ObjectId, ref: 'Event', required: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    registeredAt: { type: Date, default: Date.now }
+});
+
+const Registration = mongoose.model('Registration', registrationSchema);
+
+// Register user for event
+app.post('/event-registrations', async (req, res) => {
+    const { eventId, userId } = req.body;
+    try {
+        // Check if registration already exists
+        const exists = await Registration.findOne({ event: eventId, user: userId });
+        if (exists) {
+            return res.status(400).json({ message: 'User already registered for this event' });
+        }
+        const registration = new Registration({ event: eventId, user: userId });
+        await registration.save();
+        res.status(201).json({ message: 'Registration successful', registrationId: registration._id });
+    } catch (error) {
+        res.status(500).json({ message: 'Error registering for event', error: error.message });
+    }
+});
+
+// Get all event registrations with event title and user name
+app.get('/event-registrations', async (req, res) => {
+    try {
+        const registrations = await Registration.find()
+            .populate('event', 'title')
+            .populate('user', 'name email');
+        res.status(200).json(registrations);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching registrations', error: error.message });
+    }
+});
+
 app.listen(3001, () => {
     console.log('Server is running on port 3001');
 });
