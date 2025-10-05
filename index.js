@@ -249,3 +249,254 @@ app.get('/event-registrations', async (req, res) => {
 app.listen(3001, () => {
     console.log('Server is running on port 3001');
 });
+
+// Quiz Schema
+const quizQuestionSchema = new mongoose.Schema({
+    text: { type: String, required: true },
+    options: {
+        type: [String],
+        validate: (v) => Array.isArray(v) && v.length === 4
+    },
+    correctAnswer: { type: Number, required: true, min: 0, max: 3 }
+});
+
+const quizSchema = new mongoose.Schema({
+    title: { type: String, required: true },
+    totalMarks: { type: Number, required: true },
+    creationDate: { type: Date, default: Date.now },
+    questions: { type: [quizQuestionSchema], required: true }
+}, { timestamps: true });
+
+const Quiz = mongoose.model('Quiz', quizSchema);
+
+// Create a new quiz
+app.post('/quizzes', async (req, res) => {
+    try {
+        const { title, totalMarks, creationDate, questions } = req.body;
+
+        if (!title || totalMarks == null || !Array.isArray(questions) || questions.length === 0) {
+            return res.status(400).json({ message: 'title, totalMarks and questions are required' });
+        }
+
+        // Basic normalization
+        const normalizedQuestions = questions.map((q) => ({
+            text: String(q.text || '').trim(),
+            options: (q.options || []).map((opt) => String(opt || '').trim()).slice(0, 4),
+            correctAnswer: Number(q.correctAnswer)
+        }));
+
+        const quiz = new Quiz({
+            title: String(title).trim(),
+            totalMarks: Number(totalMarks),
+            creationDate: creationDate ? new Date(creationDate) : undefined,
+            questions: normalizedQuestions
+        });
+        await quiz.save();
+        return res.status(201).json({ message: 'Quiz created successfully', quizId: quiz._id });
+    } catch (error) {
+        return res.status(500).json({ message: 'Error creating quiz', error: error.message });
+    }
+});
+
+// Get all quizzes
+app.get('/quizzes', async (req, res) => {
+    try {
+        const quizzes = await Quiz.find().sort({ createdAt: -1 });
+        return res.status(200).json(quizzes);
+    } catch (error) {
+        return res.status(500).json({ message: 'Error fetching quizzes', error: error.message });
+    }
+});
+
+// Get a quiz for taking (hide correct answers)
+app.get('/quizzes/:id/take', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { studentId } = req.query;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid quiz id' });
+        }
+        if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
+            return res.status(401).json({ message: 'studentId is required' });
+        }
+        const student = await User.findById(studentId).select('_id role');
+        if (!student) {
+            return res.status(401).json({ message: 'Invalid student' });
+        }
+        if (student.role && student.role.toLowerCase() === 'admin') {
+            return res.status(403).json({ message: 'Admins cannot take quizzes' });
+        }
+        const quiz = await Quiz.findById(id);
+        if (!quiz) {
+            return res.status(404).json({ message: 'Quiz not found' });
+        }
+        const safeQuiz = {
+            _id: quiz._id,
+            title: quiz.title,
+            totalMarks: quiz.totalMarks,
+            questions: quiz.questions.map(q => ({ text: q.text, options: q.options }))
+        };
+        return res.status(200).json(safeQuiz);
+    } catch (error) {
+        return res.status(500).json({ message: 'Error fetching quiz for taking', error: error.message });
+    }
+});
+
+// Check a single question answer (returns whether correct and the correct index)
+app.post('/quizzes/:id/check', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { studentId, questionIndex, selectedIndex } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid quiz id' });
+        }
+        if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
+            return res.status(401).json({ message: 'studentId is required' });
+        }
+        const student = await User.findById(studentId).select('_id role');
+        if (!student) {
+            return res.status(401).json({ message: 'Invalid student' });
+        }
+        if (student.role && student.role.toLowerCase() === 'admin') {
+            return res.status(403).json({ message: 'Admins cannot take quizzes' });
+        }
+        if (typeof questionIndex !== 'number' || typeof selectedIndex !== 'number') {
+            return res.status(400).json({ message: 'questionIndex and selectedIndex must be numbers' });
+        }
+
+        const quiz = await Quiz.findById(id);
+        if (!quiz) {
+            return res.status(404).json({ message: 'Quiz not found' });
+        }
+        if (questionIndex < 0 || questionIndex >= quiz.questions.length) {
+            return res.status(400).json({ message: 'Invalid question index' });
+        }
+        if (selectedIndex < 0 || selectedIndex > 3) {
+            return res.status(400).json({ message: 'Invalid selected index' });
+        }
+
+        const correctIndex = quiz.questions[questionIndex].correctAnswer;
+        const correct = selectedIndex === correctIndex;
+        return res.status(200).json({ correct, correctIndex });
+    } catch (error) {
+        return res.status(500).json({ message: 'Error checking answer', error: error.message });
+    }
+});
+
+// Quiz Attempt Schema
+const quizAttemptSchema = new mongoose.Schema({
+    quiz: { type: mongoose.Schema.Types.ObjectId, ref: 'Quiz', required: true },
+    student: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    answers: { type: [Number], required: true },
+    numCorrect: { type: Number, required: true },
+    score: { type: Number, required: true },
+    submittedAt: { type: Date, default: Date.now }
+});
+
+// Ensure one attempt per student per quiz
+quizAttemptSchema.index({ quiz: 1, student: 1 }, { unique: true, sparse: true });
+
+const QuizAttempt = mongoose.model('QuizAttempt', quizAttemptSchema);
+
+// Submit quiz answers and grade
+app.post('/quizzes/:id/attempts', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { studentId, answers } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid quiz id' });
+        }
+        if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
+            return res.status(401).json({ message: 'studentId is required' });
+        }
+        const student = await User.findById(studentId).select('_id role');
+        if (!student) {
+            return res.status(401).json({ message: 'Invalid student' });
+        }
+        if (student.role && student.role.toLowerCase() === 'admin') {
+            return res.status(403).json({ message: 'Admins cannot attempt quizzes' });
+        }
+        if (!Array.isArray(answers)) {
+            return res.status(400).json({ message: 'answers must be an array of indices' });
+        }
+
+        const quiz = await Quiz.findById(id);
+        if (!quiz) {
+            return res.status(404).json({ message: 'Quiz not found' });
+        }
+
+        if (answers.length !== quiz.questions.length) {
+            return res.status(400).json({ message: 'answers length must match number of questions' });
+        }
+
+        // Validate answer choices are within 0-3
+        for (const idx of answers) {
+            if (typeof idx !== 'number' || idx < 0 || idx > 3) {
+                return res.status(400).json({ message: 'each answer must be an index 0-3' });
+            }
+        }
+
+        // Grade
+        let numCorrect = 0;
+        quiz.questions.forEach((q, i) => {
+            if (answers[i] === q.correctAnswer) numCorrect += 1;
+        });
+        const perQuestion = quiz.totalMarks / quiz.questions.length;
+        const rawScore = numCorrect * perQuestion;
+        const score = Math.round(rawScore * 100) / 100; // round to 2 decimals
+
+        // Prevent duplicate attempts
+        const already = await QuizAttempt.findOne({ quiz: quiz._id, student: studentId });
+        if (already) {
+            return res.status(409).json({ message: 'You have already attempted this quiz' });
+        }
+
+        const attempt = new QuizAttempt({
+            quiz: quiz._id,
+            student: studentId,
+            answers,
+            numCorrect,
+            score
+        });
+        await attempt.save();
+
+        return res.status(201).json({
+            message: 'Quiz submitted successfully',
+            attemptId: attempt._id,
+            score,
+            numCorrect,
+            totalMarks: quiz.totalMarks
+        });
+    } catch (error) {
+        return res.status(500).json({ message: 'Error submitting quiz', error: error.message });
+    }
+});
+
+// List attempts for a quiz (admin)
+app.get('/quizzes/:id/attempts', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid quiz id' });
+        }
+        const attempts = await QuizAttempt.find({ quiz: id })
+            .populate('student', '-password name email role');
+        return res.status(200).json(attempts);
+    } catch (error) {
+        return res.status(500).json({ message: 'Error fetching attempts', error: error.message });
+    }
+});
+
+// List all quiz attempts (admin view)
+app.get('/quiz-attempts', async (req, res) => {
+    try {
+        const attempts = await QuizAttempt.find()
+            .populate('quiz', 'title totalMarks')
+            .populate('student', '-password name email role');
+        return res.status(200).json(attempts);
+    } catch (error) {
+        return res.status(500).json({ message: 'Error fetching quiz attempts', error: error.message });
+    }
+});
